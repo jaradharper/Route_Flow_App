@@ -1,11 +1,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import mapboxgl from "mapbox-gl";
-import { parseSalesforceCsv } from "./csv.js";
+import {
+  ACTIVITY_THRESHOLD_DAYS,
+  calculateDaysSinceLastActivity,
+  getActivityColor,
+  shouldPulseMarker,
+} from "./activity.js";
+import { normalizeRecordKey, parseSalesforceCsv } from "./csv.js";
 import { formatAddress, geocodeAddress } from "./geocoding.js";
 
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_ACCESS_TOKEN || "";
 const INITIAL_CENTER = [-98.5795, 39.8283];
 const INITIAL_ZOOM = 3;
+const POINT_SOURCE_ID = "routeflow-address-points";
+const DENSITY_SOURCE_ID = "routeflow-density-clusters";
+const DENSITY_HALO_LAYER_ID = "routeflow-density-halos";
+const DENSITY_BUBBLE_LAYER_ID = "routeflow-density-bubbles";
+const PULSE_LAYER_ID = "routeflow-overdue-pulse";
+const DOT_LAYER_ID = "routeflow-dots";
+const UNKNOWN_ACTIVITY_COLOR = "#6b7280";
 
 mapboxgl.accessToken = MAPBOX_TOKEN;
 
@@ -18,10 +31,20 @@ export default function App() {
 
   const markerData = useMemo(
     () =>
-      locations.map((location) => ({
-        ...location,
-        addressLabel: formatAddress(location),
-      })),
+      locations.map((location) => {
+        const daysSinceLastActivity = calculateDaysSinceLastActivity(
+          location.createdDate,
+          location.lastActivity,
+        );
+
+        return {
+          ...location,
+          addressLabel: formatAddress(location),
+          daysSinceLastActivity,
+          activityColor: getActivityColor(daysSinceLastActivity),
+          shouldPulse: shouldPulseMarker(daysSinceLastActivity),
+        };
+      }),
     [locations],
   );
 
@@ -40,7 +63,7 @@ export default function App() {
       const geocoded = await Promise.all(
         records.map(async (record, index) => {
           const coordinates = await geocodeAddress(record, index);
-          return coordinates ? { id: `${record.company}-${index}`, ...record, ...coordinates } : null;
+          return coordinates ? { id: normalizeRecordKey(record), ...record, ...coordinates } : null;
         }),
       );
 
@@ -130,7 +153,7 @@ function AddressList({ locations }) {
     <ol className="address-list">
       {locations.map((location) => (
         <li key={location.id}>
-          <strong>{location.company || "Unnamed company"}</strong>
+          <strong>{location.companyName || "Unnamed company"}</strong>
           <span>{formatAddress(location)}</span>
           {location.isPlaceholder ? <em>Placeholder coordinates</em> : null}
         </li>
@@ -142,7 +165,9 @@ function AddressList({ locations }) {
 function MapView({ markers }) {
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
-  const markersRef = useRef([]);
+  const popupRef = useRef(null);
+  const pulseFrameRef = useRef(null);
+  const [isMapLoaded, setIsMapLoaded] = useState(false);
 
   const setMapContainer = useCallback((node) => {
     mapContainerRef.current = node;
@@ -159,22 +184,20 @@ function MapView({ markers }) {
     });
 
     mapRef.current.addControl(new mapboxgl.NavigationControl(), "top-right");
+    mapRef.current.on("load", () => setIsMapLoaded(true));
   }, []);
 
   useEffect(() => {
     const map = mapRef.current;
 
-    if (!map) {
+    if (!map || !isMapLoaded) {
       return;
     }
 
-    markersRef.current.forEach((marker) => marker.remove());
-    markersRef.current = markers.map((markerData) =>
-      new mapboxgl.Marker({ color: "#2563eb" })
-        .setLngLat([markerData.longitude, markerData.latitude])
-        .setPopup(new mapboxgl.Popup({ offset: 24 }).setDOMContent(createPopupContent(markerData)))
-        .addTo(map),
-    );
+    ensureAddressLayers(map);
+    const featureCollection = createFeatureCollection(markers);
+    map.getSource(POINT_SOURCE_ID).setData(featureCollection);
+    map.getSource(DENSITY_SOURCE_ID).setData(featureCollection);
 
     if (markers.length === 1) {
       map.flyTo({ center: [markers[0].longitude, markers[0].latitude], zoom: 8 });
@@ -191,7 +214,72 @@ function MapView({ markers }) {
 
       map.fitBounds(bounds, { padding: 72, maxZoom: 8 });
     }
-  }, [markers]);
+  }, [isMapLoaded, markers]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+
+    if (!map || !isMapLoaded) {
+      return undefined;
+    }
+
+    const handleDotClick = (event) => {
+      const feature = event.features?.[0];
+
+      if (!feature) {
+        return;
+      }
+
+      popupRef.current?.remove();
+      popupRef.current = new mapboxgl.Popup({ offset: 14 })
+        .setLngLat(feature.geometry.coordinates)
+        .setDOMContent(createPopupContent(feature.properties))
+        .addTo(map);
+    };
+
+    const setPointerCursor = () => {
+      map.getCanvas().style.cursor = "pointer";
+    };
+    const clearPointerCursor = () => {
+      map.getCanvas().style.cursor = "";
+    };
+
+    map.on("click", DOT_LAYER_ID, handleDotClick);
+    map.on("mouseenter", DOT_LAYER_ID, setPointerCursor);
+    map.on("mouseleave", DOT_LAYER_ID, clearPointerCursor);
+
+    return () => {
+      map.off("click", DOT_LAYER_ID, handleDotClick);
+      map.off("mouseenter", DOT_LAYER_ID, setPointerCursor);
+      map.off("mouseleave", DOT_LAYER_ID, clearPointerCursor);
+    };
+  }, [isMapLoaded]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+
+    if (!map || !isMapLoaded) {
+      return undefined;
+    }
+
+    const animatePulse = () => {
+      if (map.getLayer(PULSE_LAYER_ID)) {
+        const progress = (performance.now() % 2400) / 2400;
+        map.setPaintProperty(PULSE_LAYER_ID, "circle-radius", 7 + progress * 9);
+        map.setPaintProperty(PULSE_LAYER_ID, "circle-opacity", Math.max(0, 0.28 * (1 - progress)));
+      }
+
+      pulseFrameRef.current = requestAnimationFrame(animatePulse);
+    };
+
+    pulseFrameRef.current = requestAnimationFrame(animatePulse);
+
+    return () => {
+      if (pulseFrameRef.current) {
+        cancelAnimationFrame(pulseFrameRef.current);
+      }
+    };
+  }, [isMapLoaded]);
 
   if (!MAPBOX_TOKEN) {
     return (
@@ -207,17 +295,237 @@ function MapView({ markers }) {
   return <section ref={setMapContainer} className="map-view" aria-label="Mapped Salesforce addresses" />;
 }
 
+function ensureAddressLayers(map) {
+  if (!map.getSource(POINT_SOURCE_ID)) {
+    map.addSource(POINT_SOURCE_ID, {
+      type: "geojson",
+      data: createFeatureCollection([]),
+    });
+  }
+
+  if (!map.getSource(DENSITY_SOURCE_ID)) {
+    map.addSource(DENSITY_SOURCE_ID, {
+      type: "geojson",
+      data: createFeatureCollection([]),
+      cluster: true,
+      clusterRadius: 44,
+      clusterMaxZoom: 13,
+      clusterProperties: {
+        activityAgeSum: [
+          "+",
+          ["case", [">=", ["get", "daysSinceLastActivity"], 0], ["get", "daysSinceLastActivity"], 0],
+        ],
+        activityAgeCount: ["+", ["case", [">=", ["get", "daysSinceLastActivity"], 0], 1, 0]],
+      },
+    });
+  }
+
+  if (!map.getLayer(DENSITY_HALO_LAYER_ID)) {
+    map.addLayer({
+      id: DENSITY_HALO_LAYER_ID,
+      type: "circle",
+      source: DENSITY_SOURCE_ID,
+      filter: ["has", "point_count"],
+      paint: {
+        "circle-color": getClusterColorExpression(),
+        "circle-radius": ["step", ["get", "point_count"], 28, 10, 40, 30, 54, 75, 70],
+        "circle-blur": 0.55,
+        "circle-opacity": 0.28,
+      },
+    });
+  }
+
+  if (!map.getLayer(DENSITY_BUBBLE_LAYER_ID)) {
+    map.addLayer({
+      id: DENSITY_BUBBLE_LAYER_ID,
+      type: "circle",
+      source: DENSITY_SOURCE_ID,
+      filter: ["has", "point_count"],
+      paint: {
+        "circle-color": getClusterColorExpression(),
+        "circle-radius": ["step", ["get", "point_count"], 22, 10, 31, 30, 42, 75, 54],
+        "circle-stroke-color": "#ffffff",
+        "circle-stroke-width": 1,
+        "circle-opacity": 0.38,
+        "circle-stroke-opacity": 0.35,
+      },
+    });
+  }
+
+  if (!map.getLayer(PULSE_LAYER_ID)) {
+    map.addLayer({
+      id: PULSE_LAYER_ID,
+      type: "circle",
+      source: POINT_SOURCE_ID,
+      filter: ["==", ["get", "shouldPulse"], true],
+      paint: {
+        "circle-color": ["coalesce", ["get", "activityColor"], UNKNOWN_ACTIVITY_COLOR],
+        "circle-radius": 7,
+        "circle-opacity": 0.18,
+      },
+    });
+  }
+
+  if (!map.getLayer(DOT_LAYER_ID)) {
+    map.addLayer({
+      id: DOT_LAYER_ID,
+      type: "circle",
+      source: POINT_SOURCE_ID,
+      paint: {
+        "circle-color": ["coalesce", ["get", "activityColor"], UNKNOWN_ACTIVITY_COLOR],
+        "circle-radius": 6.5,
+        "circle-stroke-color": "#ffffff",
+        "circle-stroke-width": 1.5,
+        "circle-opacity": 0.96,
+        "circle-stroke-opacity": 1,
+      },
+    });
+  }
+}
+
+function createFeatureCollection(markers) {
+  return {
+    type: "FeatureCollection",
+    features: markers.map((marker) => ({
+      type: "Feature",
+      id: marker.id,
+      geometry: {
+        type: "Point",
+        coordinates: [marker.longitude, marker.latitude],
+      },
+      properties: {
+        ...marker,
+        activityColor: normalizeActivityColor(marker.activityColor),
+        daysSinceLastActivity:
+          typeof marker.daysSinceLastActivity === "number" ? marker.daysSinceLastActivity : -1,
+      },
+    })),
+  };
+}
+
+function getClusterColorExpression() {
+  const averageAge = ["/", ["get", "activityAgeSum"], ["get", "activityAgeCount"]];
+
+  return [
+    "case",
+    ["==", ["get", "activityAgeCount"], 0],
+    UNKNOWN_ACTIVITY_COLOR,
+    [">=", averageAge, ACTIVITY_THRESHOLD_DAYS],
+    normalizeActivityColor(getActivityColor(ACTIVITY_THRESHOLD_DAYS)),
+    [
+      "interpolate",
+      ["linear"],
+      averageAge,
+      0,
+      normalizeActivityColor(getActivityColor(0)),
+      Math.round(ACTIVITY_THRESHOLD_DAYS * 0.6),
+      normalizeActivityColor(getActivityColor(Math.round(ACTIVITY_THRESHOLD_DAYS * 0.6))),
+      Math.round(ACTIVITY_THRESHOLD_DAYS * 0.88),
+      normalizeActivityColor(getActivityColor(Math.round(ACTIVITY_THRESHOLD_DAYS * 0.88))),
+      ACTIVITY_THRESHOLD_DAYS,
+      normalizeActivityColor(getActivityColor(ACTIVITY_THRESHOLD_DAYS)),
+    ],
+  ];
+}
+
+function normalizeActivityColor(color) {
+  if (typeof color !== "string") {
+    return UNKNOWN_ACTIVITY_COLOR;
+  }
+
+  const trimmedColor = color.trim();
+
+  if (/^#[0-9a-f]{6}$/i.test(trimmedColor)) {
+    return trimmedColor;
+  }
+
+  const hslMatch = trimmedColor.match(/^hsl\(\s*(-?\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)%\s+(\d+(?:\.\d+)?)%\s*\)$/i);
+
+  if (!hslMatch) {
+    return UNKNOWN_ACTIVITY_COLOR;
+  }
+
+  return hslToHex(Number(hslMatch[1]), Number(hslMatch[2]), Number(hslMatch[3]));
+}
+
+function hslToHex(hue, saturation, lightness) {
+  if (![hue, saturation, lightness].every(Number.isFinite)) {
+    return UNKNOWN_ACTIVITY_COLOR;
+  }
+
+  const normalizedHue = (((hue % 360) + 360) % 360) / 360;
+  const normalizedSaturation = Math.min(Math.max(saturation, 0), 100) / 100;
+  const normalizedLightness = Math.min(Math.max(lightness, 0), 100) / 100;
+
+  const hueToRgb = (p, q, t) => {
+    let adjustedT = t;
+
+    if (adjustedT < 0) adjustedT += 1;
+    if (adjustedT > 1) adjustedT -= 1;
+    if (adjustedT < 1 / 6) return p + (q - p) * 6 * adjustedT;
+    if (adjustedT < 1 / 2) return q;
+    if (adjustedT < 2 / 3) return p + (q - p) * (2 / 3 - adjustedT) * 6;
+
+    return p;
+  };
+
+  const q =
+    normalizedLightness < 0.5
+      ? normalizedLightness * (1 + normalizedSaturation)
+      : normalizedLightness + normalizedSaturation - normalizedLightness * normalizedSaturation;
+  const p = 2 * normalizedLightness - q;
+  const red = hueToRgb(p, q, normalizedHue + 1 / 3);
+  const green = hueToRgb(p, q, normalizedHue);
+  const blue = hueToRgb(p, q, normalizedHue - 1 / 3);
+
+  return `#${[red, green, blue]
+    .map((channel) =>
+      Math.round(channel * 255)
+        .toString(16)
+        .padStart(2, "0"),
+    )
+    .join("")}`;
+}
+
 function createPopupContent(markerData) {
   const container = document.createElement("div");
   container.className = "marker-popup";
 
   const company = document.createElement("strong");
-  company.textContent = markerData.company || "Unnamed company";
+  company.textContent = markerData.companyName || markerData.company || "Unnamed company";
   container.append(company);
 
-  const address = document.createElement("span");
-  address.textContent = markerData.addressLabel;
-  container.append(address);
+  const details = [
+    ["Contact", [markerData.firstName, markerData.lastName].filter(Boolean).join(" ")],
+    ["Phone", markerData.phone],
+    ["Address", markerData.addressLabel],
+    ["Created Date", markerData.createdDate],
+    ["Last Activity", markerData.lastActivity],
+    ["Elapsed Days", formatDaysSinceLastActivity(markerData.daysSinceLastActivity)],
+    ["Suspect ID", markerData.suspectId],
+  ];
+
+  details.forEach(([label, value]) => {
+    const row = document.createElement("div");
+    row.className = "popup-detail";
+
+    const labelElement = document.createElement("span");
+    labelElement.textContent = label;
+
+    const valueElement = document.createElement("b");
+    valueElement.textContent = value || "Not provided";
+
+    row.append(labelElement, valueElement);
+    container.append(row);
+  });
 
   return container;
+}
+
+function formatDaysSinceLastActivity(daysSinceLastActivity) {
+  if (typeof daysSinceLastActivity !== "number" || daysSinceLastActivity < 0) {
+    return "Unknown";
+  }
+
+  return `${daysSinceLastActivity} day${daysSinceLastActivity === 1 ? "" : "s"}`;
 }

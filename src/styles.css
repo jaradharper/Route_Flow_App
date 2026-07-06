@@ -153,8 +153,9 @@ h1 {
 
 .marker-popup {
   display: grid;
-  gap: 0.25rem;
-  max-width: 240px;
+  gap: 0.45rem;
+  min-width: 210px;
+  max-width: 280px;
 }
 
 .marker-popup strong {
@@ -162,9 +163,24 @@ h1 {
   font-size: 0.95rem;
 }
 
-.marker-popup span {
+.popup-detail {
+  display: grid;
+  gap: 0.05rem;
+}
+
+.popup-detail span {
+  color: #64748b;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.popup-detail b {
   color: #52637d;
   font-size: 0.86rem;
+  font-weight: 600;
   line-height: 1.35;
 }
 

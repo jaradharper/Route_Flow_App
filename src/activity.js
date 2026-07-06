@@ -1,4 +1,4 @@
-export const ACTIVITY_THRESHOLD_DAYS = 45;
+export const ACTIVITY_THRESHOLD_DAYS = 60;
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const RECENT_GREEN = { hue: 145, saturation: 66, lightness: 43 };
@@ -7,18 +7,20 @@ const WARNING_ORANGE = { hue: 25, saturation: 90, lightness: 52 };
 const OVERDUE_RED = "#dc2626";
 const UNKNOWN_GRAY = "#6b7280";
 
-export function calculateDaysSinceLastActivity(lastActivity, today = new Date()) {
-  const activityDate = parseActivityDate(lastActivity);
+export function calculateDaysSinceLastActivity(createdDate, lastActivity, today = new Date()) {
+  const createdAt = parseActivityDate(createdDate);
+  const hasLastActivity = Boolean(String(lastActivity ?? "").trim());
+  const activityDate = hasLastActivity ? parseActivityDate(lastActivity) : today;
 
-  if (!activityDate) {
+  if (!createdAt || !activityDate) {
     return null;
   }
 
-  const todayStart = startOfDay(today);
+  const createdAtStart = startOfDay(createdAt);
   const activityStart = startOfDay(activityDate);
-  const daysSinceActivity = Math.floor((todayStart.getTime() - activityStart.getTime()) / MS_PER_DAY);
+  const elapsedDays = Math.floor((activityStart.getTime() - createdAtStart.getTime()) / MS_PER_DAY);
 
-  return Math.max(0, daysSinceActivity);
+  return elapsedDays < 0 ? null : elapsedDays;
 }
 
 export function getActivityColor(daysSinceLastActivity) {
