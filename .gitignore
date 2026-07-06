@@ -3,6 +3,14 @@ node_modules/
 
 # Environment variables
 .env
+.env.local
+.env.*.local
+
+# RouteFlow local auth/session storage
+.routeflow/
+salesforce-token*.json
+salesforce-session*.json
+oauth-state*.json
 
 # Build output
 dist/

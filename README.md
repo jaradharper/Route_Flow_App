@@ -24,6 +24,43 @@ React + Vite app for uploading a Salesforce CSV export and displaying company ad
    npm run dev
    ```
 
+4. In a second terminal, start the local Salesforce backend:
+
+   ```bash
+   npm run server
+   ```
+
+## Salesforce refresh
+
+RouteFlow can refresh from one configured Salesforce report through a local OAuth backend. The frontend never receives your Salesforce password, MFA code, client secret, or refresh token.
+
+Create a Salesforce Connected App and configure its callback URL as:
+
+```text
+http://localhost:5174/api/salesforce/callback
+```
+
+Then add these values to your local `.env` file:
+
+```bash
+SALESFORCE_CLIENT_ID=
+SALESFORCE_CLIENT_SECRET=
+SALESFORCE_REDIRECT_URI=http://localhost:5174/api/salesforce/callback
+SALESFORCE_LOGIN_URL=https://login.salesforce.com
+SALESFORCE_REPORT_ID=
+SALESFORCE_API_VERSION=v61.0
+```
+
+Use `https://test.salesforce.com` for `SALESFORCE_LOGIN_URL` if you are connecting to a sandbox.
+
+Click **Connect Salesforce** in RouteFlow, complete Salesforce login, then click **Refresh from Salesforce**. The backend downloads report rows, converts them into CSV text, and sends them through the same parser and Mapbox geocoding flow used by manual CSV upload.
+
+Salesforce admin approval may be required for Connected App access, API access, report visibility, or permissions such as `Run Reports` and `View Reports`.
+
+The Salesforce Reports API can return up to the first 2,000 report rows for this MVP. If the RouteFlow report grows beyond that, use a later SOQL or Bulk API integration.
+
+Local Salesforce OAuth token data is stored under `.routeflow/`, which is ignored by git.
+
 ## CSV columns
 
 The parser expects Salesforce-style columns for:
@@ -83,4 +120,4 @@ Clusters split back into individual dots as you zoom in.
 
 ## Current MVP scope
 
-RouteFlow imports Salesforce CSV files, geocodes addresses through Mapbox, displays activity-colored dots on a satellite map, clusters dense areas, and shows account details in popups. It does not store uploaded data or generate coordinates locally.
+RouteFlow imports Salesforce CSV files or refreshes from one Salesforce report, geocodes addresses through Mapbox, displays activity-colored dots on a satellite map, clusters dense areas, and shows account details in popups. It does not generate coordinates locally.

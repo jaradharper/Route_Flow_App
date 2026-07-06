@@ -19,6 +19,7 @@ const DENSITY_BUBBLE_LAYER_ID = "routeflow-density-bubbles";
 const PULSE_LAYER_ID = "routeflow-overdue-pulse";
 const DOT_LAYER_ID = "routeflow-dots";
 const UNKNOWN_ACTIVITY_COLOR = "#6b7280";
+const ROUTEFLOW_API_URL = import.meta.env.VITE_ROUTEFLOW_API_URL || "http://localhost:5174";
 
 mapboxgl.accessToken = MAPBOX_TOKEN;
 
@@ -28,6 +29,8 @@ export default function App() {
   const [status, setStatus] = useState("Drop a Salesforce CSV to map addresses.");
   const [isDragging, setIsDragging] = useState(false);
   const [error, setError] = useState("");
+  const [salesforceStatus, setSalesforceStatus] = useState({ connected: false, loading: true });
+  const [isRefreshingSalesforce, setIsRefreshingSalesforce] = useState(false);
 
   const markerData = useMemo(
     () =>
@@ -48,15 +51,9 @@ export default function App() {
     [locations],
   );
 
-  const handleFiles = useCallback(async (files) => {
-    const file = files?.[0];
-
-    if (!file) {
-      return;
-    }
-
+  const importCsvFile = useCallback(async (file, sourceLabel = file?.name || "CSV") => {
     setError("");
-    setStatus(`Parsing ${file.name}...`);
+    setStatus(`Parsing ${sourceLabel}...`);
 
     try {
       const records = await parseSalesforceCsv(file);
@@ -71,7 +68,7 @@ export default function App() {
       setLocations(nextLocations);
       setStatus(
         nextLocations.length
-          ? `Mapped ${nextLocations.length} address${nextLocations.length === 1 ? "" : "es"}.`
+          ? `Mapped ${nextLocations.length} address${nextLocations.length === 1 ? "" : "es"} from ${sourceLabel}.`
           : "No usable addresses were found in that CSV.",
       );
     } catch (parseError) {
@@ -80,6 +77,89 @@ export default function App() {
       setStatus("Upload failed.");
     }
   }, []);
+
+  const handleFiles = useCallback(
+    async (files) => {
+      const file = files?.[0];
+
+      if (!file) {
+        return;
+      }
+
+      await importCsvFile(file, file.name);
+    },
+    [importCsvFile],
+  );
+
+  const refreshSalesforceStatus = useCallback(async () => {
+    try {
+      const response = await fetch(`${ROUTEFLOW_API_URL}/api/salesforce/status`);
+      const nextStatus = await response.json();
+      setSalesforceStatus({ connected: Boolean(nextStatus.connected), loading: false });
+    } catch {
+      setSalesforceStatus({ connected: false, loading: false });
+    }
+  }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const salesforceError = params.get("salesforceError");
+    const salesforceMessage = params.get("salesforce");
+
+    if (salesforceError) {
+      setError(salesforceError);
+    } else if (salesforceMessage) {
+      setStatus(salesforceMessage);
+    }
+
+    if (salesforceError || salesforceMessage) {
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+
+    refreshSalesforceStatus();
+  }, [refreshSalesforceStatus]);
+
+  const connectSalesforce = () => {
+    window.location.href = `${ROUTEFLOW_API_URL}/api/salesforce/login`;
+  };
+
+  const disconnectSalesforce = async () => {
+    setError("");
+
+    try {
+      await fetch(`${ROUTEFLOW_API_URL}/api/salesforce/logout`, { method: "POST" });
+      setSalesforceStatus({ connected: false, loading: false });
+      setStatus("Salesforce disconnected.");
+    } catch {
+      setError("Unable to disconnect Salesforce. Check that the local RouteFlow server is running.");
+    }
+  };
+
+  const refreshFromSalesforce = async () => {
+    setError("");
+    setIsRefreshingSalesforce(true);
+    setStatus("Refreshing Salesforce report...");
+
+    try {
+      const response = await fetch(`${ROUTEFLOW_API_URL}/api/salesforce/refresh-report`, {
+        method: "POST",
+      });
+      const payload = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(payload.error || "Salesforce refresh failed.");
+      }
+
+      const csvFile = new File([payload.csv], "salesforce-report.csv", { type: "text/csv" });
+      await importCsvFile(csvFile, payload.reportName || "Salesforce report");
+      await refreshSalesforceStatus();
+    } catch (refreshError) {
+      setError(refreshError.message || "Salesforce refresh failed.");
+      setStatus("Salesforce refresh failed.");
+    } finally {
+      setIsRefreshingSalesforce(false);
+    }
+  };
 
   return (
     <main className="app-shell">
@@ -136,11 +216,53 @@ export default function App() {
           </p>
         ) : null}
 
+        <SalesforceControls
+          connected={salesforceStatus.connected}
+          loading={salesforceStatus.loading}
+          refreshing={isRefreshingSalesforce}
+          onConnect={connectSalesforce}
+          onDisconnect={disconnectSalesforce}
+          onRefresh={refreshFromSalesforce}
+        />
+
         <AddressList locations={locations} />
       </section>
 
       <MapView markers={markerData} />
     </main>
+  );
+}
+
+function SalesforceControls({ connected, loading, refreshing, onConnect, onDisconnect, onRefresh }) {
+  return (
+    <section className="salesforce-controls" aria-label="Salesforce report controls">
+      <div>
+        <strong>Salesforce report</strong>
+        <span>
+          {loading
+            ? "Checking connection..."
+            : connected
+              ? "Connected locally"
+              : "Connect to refresh RouteFlow from a saved Salesforce report."}
+        </span>
+      </div>
+      <div className="salesforce-actions">
+        {connected ? (
+          <>
+            <button type="button" onClick={onRefresh} disabled={refreshing}>
+              {refreshing ? "Refreshing..." : "Refresh from Salesforce"}
+            </button>
+            <button type="button" className="secondary-button" onClick={onDisconnect} disabled={refreshing}>
+              Disconnect
+            </button>
+          </>
+        ) : (
+          <button type="button" onClick={onConnect} disabled={loading}>
+            Connect Salesforce
+          </button>
+        )}
+      </div>
+    </section>
   );
 }
 

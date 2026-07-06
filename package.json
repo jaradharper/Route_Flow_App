@@ -1,16 +1,17 @@
 {
   "scripts": {
     "dev": "vite",
+    "server": "node server/index.mjs",
     "build": "vite build",
     "preview": "vite preview"
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",
-    "vite": "latest",
+    "express": "^5.2.1",
+    "mapbox-gl": "latest",
+    "papaparse": "latest",
     "react": "latest",
     "react-dom": "latest",
-    "mapbox-gl": "latest",
-    "papaparse": "latest"
-  },
-  "devDependencies": {}
+    "vite": "latest"
+  }
 }

@@ -23,6 +23,21 @@ input {
   font: inherit;
 }
 
+button {
+  border: 0;
+  border-radius: 8px;
+  background: #2563eb;
+  color: #ffffff;
+  cursor: pointer;
+  font-weight: 800;
+  padding: 0.72rem 0.9rem;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
 code {
   border-radius: 4px;
   background: #e7edf7;
@@ -118,6 +133,39 @@ h1 {
   background: #fff4d6;
   padding: 0.85rem;
   color: #6b4e00;
+}
+
+.salesforce-controls {
+  display: grid;
+  gap: 0.8rem;
+  border: 1px solid #dde5f2;
+  border-radius: 8px;
+  padding: 0.95rem;
+}
+
+.salesforce-controls div:first-child {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.salesforce-controls strong {
+  color: #111827;
+}
+
+.salesforce-controls span {
+  color: #52637d;
+  font-size: 0.9rem;
+}
+
+.salesforce-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+.secondary-button {
+  background: #e7edf7;
+  color: #213252;
 }
 
 .address-list {
