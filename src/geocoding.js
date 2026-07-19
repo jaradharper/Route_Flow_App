@@ -46,3 +46,46 @@ export async function geocodeAddress(record) {
     return null;
   }
 }
+
+export async function geocodeSearchAddress(query) {
+  const address = String(query ?? "").trim();
+  const accessToken = import.meta.env.VITE_MAPBOX_ACCESS_TOKEN;
+
+  if (!address || !accessToken) {
+    return null;
+  }
+
+  const params = new URLSearchParams({
+    access_token: accessToken,
+    country: "US",
+    limit: "1",
+    types: "address,place,postcode,locality,neighborhood,poi",
+  });
+
+  try {
+    const response = await fetch(
+      `${MAPBOX_GEOCODING_ENDPOINT}/${encodeURIComponent(address)}.json?${params.toString()}`,
+    );
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const data = await response.json();
+    const feature = data.features?.[0];
+    const [longitude, latitude] = feature?.center ?? [];
+
+    if (typeof longitude !== "number" || typeof latitude !== "number") {
+      return null;
+    }
+
+    return {
+      longitude,
+      latitude,
+      label: feature.place_name || address,
+      query: address,
+    };
+  } catch {
+    return null;
+  }
+}

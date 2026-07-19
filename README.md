@@ -94,6 +94,21 @@ Coordinate flow:
 
 Rows that cannot be geocoded are skipped instead of being placed on the map.
 
+## Floating address search
+
+Use the floating glass search bar over the map to look up any address without changing imported account data. Searched addresses are geocoded by Mapbox and shown as a purple star.
+
+The purple star is separate from CSV/Salesforce account dots. It is not added to clusters, density bubbles, activity colors, CSV rows, or Salesforce data.
+
+## Map markers
+
+- Blue dot: your current device location from browser geolocation.
+- Purple star: manually searched address from the floating search bar.
+- Colored dots: Salesforce/account locations from CSV upload or Salesforce refresh.
+- Density bubbles: account concentration areas only; they do not include the blue dot or purple star.
+
+If browser location permission is denied or unavailable, RouteFlow keeps working and simply hides the blue dot.
+
 ## Marker colors
 
 Markers are small circular dots. Color is based on elapsed time from `Created Date` to `Last Activity`.
@@ -106,6 +121,8 @@ If `Last Activity` is missing, RouteFlow uses today's date as the effective last
 - Red overdue dots have a subtle pulse.
 
 The revisit threshold is controlled by `ACTIVITY_THRESHOLD_DAYS` in `src/activity.js`.
+
+If an uploaded CSV does not include `Created Date` or `Last Activity`, account dots may render gray by design.
 
 ## Clustering
 
